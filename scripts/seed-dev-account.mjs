@@ -15,13 +15,18 @@ import { PrismaClient } from "../src/generated/prisma/index.js";
 
 process.loadEnvFile(".env");
 
-const withSubscription = !process.argv.includes("--free");
-const email = "dev@appealforge.test";
-const name = "Dev Tester";
+function arg(flag, fallback) {
+  const index = process.argv.indexOf(flag);
+  return index !== -1 && process.argv[index + 1] ? process.argv[index + 1] : fallback;
+}
 
-// Readable but not guessable: five words-worth of entropy, regenerated on
-// every run so a stale copy of the file is never a working credential.
-const password = `af-${randomBytes(9).toString("base64url")}`;
+const withSubscription = !process.argv.includes("--free");
+const email = arg("--email", "dev@appealforge.test");
+const name = arg("--name", "Dev Tester");
+
+// Readable but not guessable, and regenerated on every run so a stale copy of
+// the file is never a working credential. Pass --password to pin one instead.
+const password = arg("--password", `af-${randomBytes(9).toString("base64url")}`);
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -70,6 +75,6 @@ writeFileSync(
   )}\n`,
 );
 
-console.log(`Account ready for ${email}.`);
+console.log(`Account ready for ${email} on ${process.env.DATABASE_URL?.split("@")[1] ?? "the configured database"}.`);
 console.log(`Subscription: ${withSubscription ? "ACTIVE" : "none (use --free to keep it off)"}`);
 console.log(`Password written to ${target} - open that file to read it.`);

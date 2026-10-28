@@ -220,9 +220,35 @@ table for letters or claim data, by design.
 
 ---
 
-## Claude API configuration
+## AI provider configuration
 
-Set `ANTHROPIC_API_KEY`. `ANTHROPIC_MODEL` defaults to `claude-opus-5`.
+The letter writer is multi-provider. `AI_PROVIDER` chooses who drafts:
+
+| Value | Behaviour |
+| --- | --- |
+| `auto` (default) | Every configured provider, best first. Fails over when one is unauthorised, rate limited, timing out, or out of credit. |
+| `anthropic` | Pin to Claude. No failover. |
+| `mistral` | Pin to Mistral. No failover. |
+
+Failover is for outages only. A refusal, or a request the model rejects on its
+merits, stops there - asking a second model to do what the first declined would
+be routing around a safety decision, not recovering from a fault. Nothing is
+charged per attempt either: generation always happens before payment, so
+failover can never double-charge anyone.
+
+Set `ANTHROPIC_API_KEY` for Claude (`ANTHROPIC_MODEL` defaults to
+`claude-opus-5`) and optionally `MISTRAL_API_KEY` for Mistral
+(`MISTRAL_MODEL` defaults to `mistral-medium-latest`).
+
+> **On Mistral free tiers:** the larger models answer `429 Rate limit
+> exceeded` regardless of request volume, leaving only `ministral-8b-latest`.
+> That model does not follow this prompt reliably - in testing it omitted the
+> enclosures list and invented a contact address - so the output fails
+> validation rather than reaching a user. Treat Mistral as a usable fallback
+> only on a paid tier.
+
+`GET /api/health` reports which providers are configured, which is active, and
+the failover order - names and booleans, never keys.
 
 The system prompt is used **verbatim**. It lives in `docs/system-prompt.txt`,
 is compiled into `src/lib/ai/system-prompt.ts` by
@@ -231,10 +257,29 @@ matching the spec copy or its recorded SHA-256. User input never touches it:
 form values travel in a separate, fenced user message, flattened to one line per
 field and stripped of anything resembling the fence.
 
-What the request sets: adaptive thinking at medium effort, the system prompt
-cached, server-side refusal fallbacks, a 120-second timeout, and at most one
-retry - and only for a failure that produced no letter, so a user is never
-billed twice for one draft.
+What the Claude request sets: adaptive thinking at medium effort, the system
+prompt cached, server-side refusal fallbacks, a 120-second timeout, and at most
+one retry - and only for a failure that produced no letter. The Mistral request
+sends the same verbatim system prompt and the same fenced user message over
+plain `fetch`, so a letter drafted by either provider obeys identical rules.
+
+### A test account
+
+To sign in without going through Stripe - useful right after a deploy:
+
+```bash
+npx tsx --tsconfig tsconfig.scripts.json scripts/seed-dev-account.mjs
+```
+
+It upserts an account with an **active subscription**, so letters unlock
+immediately. The generated password is written to `scripts/.dev-account.json`
+(gitignored) rather than printed. Flags: `--email`, `--name`, `--password` to
+pin values, `--free` for an account with no subscription.
+
+It writes to whatever `DATABASE_URL` is set, so to seed a deployed environment,
+point `DATABASE_URL` at that database and run it from your machine. This is a
+test convenience, not a product feature - do not leave a seeded account on a
+production database that real users can reach.
 
 ---
 
