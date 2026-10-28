@@ -1,0 +1,167 @@
+// AppealForge database schema.
+//
+// PRIVACY RULE, enforced by review and by tests/integration/privacy.test.ts:
+// nothing in this file may hold claim data. No patient name, date of birth,
+// member ID, claim number, diagnosis, codes, clinical narrative or generated
+// letter is ever written to the database. Letters live only in the browser tab
+// that generated them.
+//
+// What is stored: accounts, Stripe references, entitlement records keyed by a
+// random draft id, webhook idempotency keys, business leads, rate-limit
+// counters and anonymous daily usage counters.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+// Prisma 7 takes connection URLs from prisma.config.ts, not from this file.
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id               String   @id @default(cuid())
+  email            String   @unique
+  emailNormalized  String   @unique
+  name             String?
+  passwordHash     String
+  stripeCustomerId String?  @unique
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  subscriptions       Subscription[]
+  purchases           Purchase[]
+  passwordResetTokens PasswordResetToken[]
+
+  @@index([stripeCustomerId])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// One $12 purchase unlocks exactly one draft, identified by a random id that
+/// carries no information about the letter or the patient.
+model Purchase {
+  id                    String         @id @default(cuid())
+  draftId               String         @unique
+  stripeSessionId       String         @unique
+  stripePaymentIntentId String?
+  stripeCustomerId      String?
+  userId                String?
+  amountTotal           Int
+  currency              String         @default("usd")
+  status                PurchaseStatus @default(PENDING)
+  paidAt                DateTime?
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([stripeCustomerId])
+}
+
+enum PurchaseStatus {
+  PENDING
+  PAID
+  REFUNDED
+  FAILED
+}
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  userId               String
+  stripeSubscriptionId String             @unique
+  stripeCustomerId     String
+  stripePriceId        String
+  status               SubscriptionStatus
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean            @default(false)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([stripeCustomerId])
+  @@index([status])
+}
+
+enum SubscriptionStatus {
+  INCOMPLETE
+  INCOMPLETE_EXPIRED
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  UNPAID
+  PAUSED
+}
+
+/// Stripe can deliver an event more than once. Inserting the event id first
+/// makes webhook handling idempotent.
+model WebhookEvent {
+  id          String   @id
+  type        String
+  receivedAt  DateTime @default(now())
+  processedAt DateTime?
+  error       String?
+
+  @@index([type])
+}
+
+/// Business leads for the billing-company CTA. Contact details only - the form
+/// does not accept and must never be used for patient or claim information.
+model Lead {
+  id                String   @id @default(cuid())
+  name              String
+  organization      String?
+  email             String
+  phone             String?
+  monthlyClaimVolume String?
+  primaryChallenge  String?
+  sourcePath        String?
+  consentedAt       DateTime
+  createdAt         DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([email])
+}
+
+/// Shared rate-limit store. Postgres rather than process memory so the limits
+/// hold across serverless instances.
+model RateLimit {
+  id          String   @id @default(cuid())
+  bucket      String
+  identifier  String
+  windowStart DateTime
+  count       Int      @default(0)
+  expiresAt   DateTime
+
+  @@unique([bucket, identifier, windowStart])
+  @@index([expiresAt])
+}
+
+/// Anonymous aggregates. Counts only - no identifiers, no claim data.
+model UsageCounter {
+  id     String   @id @default(cuid())
+  day    DateTime @db.Date
+  metric String
+  detail String   @default("")
+  count  Int      @default(0)
+
+  @@unique([day, metric, detail])
+  @@index([day])
+}
